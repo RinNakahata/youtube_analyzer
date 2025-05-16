@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from janome.tokenizer import Tokenizer
 from wordcloud import WordCloud
+from collections import Counter
 
 # --- 初期設定 ---
 plt.rcParams['font.family'] = 'Meiryo' if os.name == 'nt' else 'IPAexGothic'
@@ -13,6 +14,17 @@ OUTPUT_BASE_FOLDER = "output"
 TODAY_STR = datetime.now().strftime("%Y-%m-%d")
 OUTPUT_FOLDER = os.path.join(OUTPUT_BASE_FOLDER, TODAY_STR)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+# フォント設定（日本語対応）
+plt.rcParams['font.family'] = 'Meiryo' if os.name == 'nt' else 'IPAexGothic'
+
+# データフォルダと出力フォルダ定義
+DATA_FOLDER = "data"
+TODAY = datetime.now().strftime("%Y-%m-%d")  # 実行日
+OUTPUT_DIR = os.path.join("output", TODAY)
+
+# 出力フォルダがなければ作成
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # --- データ読み込み関連関数 ---
 
@@ -231,6 +243,108 @@ def plot_channel_performance(df):
     df.to_excel(os.path.join(OUTPUT_FOLDER,
                 "channel_performance.xlsx"), index=False)
 
+# --- 動画の長さ別再生数分析 ---
+
+
+def analyze_views_by_duration(files):
+    """
+    動画長さ（duration秒）をカテゴリ別に分けて平均再生数を算出し、棒グラフを表示する。
+    """
+    all_data = []
+
+    for file in files:
+        df = read_data(file)
+        if "duration" not in df.columns:
+            continue
+        channel = file.replace(".csv", "")
+        # durationは秒数として扱う
+        df = df.dropna(subset=["duration"])
+        df["duration"] = df["duration"].astype(float)
+
+        # カテゴリ分け（例）
+        def categorize_duration(d):
+            if d <= 15:
+                return "～15秒"
+            elif d <= 30:
+                return "16～30秒"
+            elif d <= 45:
+                return "31～45秒"
+            elif d <= 60:
+                return "46～60秒"
+            else:
+                return "60秒超"
+
+        df["duration_cat"] = df["duration"].apply(categorize_duration)
+        all_data.append(df)
+
+    if not all_data:
+        print("動画の長さデータがありません。")
+        return
+
+    combined = pd.concat(all_data)
+    avg_views = combined.groupby("duration_cat")["viewCount"].mean().reindex(
+        ["～15秒", "16～30秒", "31～45秒", "46～60秒", "60秒超"])
+
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x=avg_views.index, y=avg_views.values, palette="magma")
+    plt.title("動画の長さ別・平均再生数")
+    plt.xlabel("動画の長さ")
+    plt.ylabel("平均再生数")
+    plt.tight_layout()
+    plt.savefig(f"{OUTPUT_DIR}/views_by_duration.png")
+    plt.show()
+
+
+# --- 成功動画タイトルワードランキング（Top20） ---
+
+
+def analyze_success_title_words(files):
+    """
+    全動画の平均再生数以上の動画タイトルから形態素解析し、頻出単語Top20を抽出して表示する。
+    """
+    tokenizer = Tokenizer()
+    all_dfs = []
+
+    for file in files:
+        df = read_data(file)
+        df["channel"] = file.replace(".csv", "")
+        all_dfs.append(df)
+
+    combined = pd.concat(all_dfs)
+    overall_avg_views = combined["viewCount"].mean()
+    success_videos = combined[combined["viewCount"] >= overall_avg_views]
+
+    if success_videos.empty:
+        print("成功動画がありません。")
+        return
+
+    words = []
+    for title in success_videos["title"].dropna().astype(str):
+        tokens = tokenizer.tokenize(title)
+        for token in tokens:
+            pos = token.part_of_speech.split(',')[0]
+            if pos in ["名詞", "動詞", "形容詞"]:
+                base = token.base_form
+                if len(base) > 1:
+                    words.append(base)
+
+    if not words:
+        print("成功動画タイトルから抽出できる単語がありません。")
+        return
+
+    word_counts = Counter(words)
+    common_words = word_counts.most_common(20)
+    words_list, counts = zip(*common_words)
+
+    plt.figure(figsize=(12, 6))
+    sns.barplot(x=list(counts), y=list(words_list), palette="viridis")
+    plt.title("成功動画タイトル頻出ワード Top20")
+    plt.xlabel("出現回数")
+    plt.ylabel("単語")
+    plt.tight_layout()
+    plt.savefig(f"{OUTPUT_DIR}/success_title_words_top20.png")
+    plt.show()
+
 # --- メイン処理 ---
 
 
@@ -247,6 +361,8 @@ def main():
     plot_heatmap_weekday_hour(files)
     perf_df = analyze_channel_performance(files)
     plot_channel_performance(perf_df)
+    analyze_views_by_duration(files)
+    analyze_success_title_words(files)
 
 
 if __name__ == "__main__":
